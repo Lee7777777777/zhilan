@@ -7,6 +7,7 @@ import shutil
 import sys
 import threading
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -14,6 +15,8 @@ from app.renderer import MdRenderer, iter_local_images, read_text
 
 UNTAGGED = None
 ILLEGAL_FN = re.compile(r"[\\/:*?\"<>|]")
+SCHEMA_VERSION = 2
+ID_RE = re.compile(r"^[0-9a-f]{12}$")
 
 
 def atomic_write(path: Path, data) -> None:
@@ -50,7 +53,7 @@ class KnowledgeIndex:
         try:
             raw = json.loads(self.index_file.read_text(encoding="utf-8"))
         except Exception as ex:
-            # 索引损坏时先留一份现场，再以空索引启动；否则下一次 _save 会把它彻底覆盖
+            # 索引损坏：先留一份现场，再从 items/ 重建，别让一次坏文件把整个库变成空的
             try:
                 bad = self.index_file.with_name(
                     "index.json.bad-%s" % datetime.now().strftime("%Y%m%d-%H%M%S"))
@@ -58,6 +61,7 @@ class KnowledgeIndex:
                 print("索引无法解析(%s)，已备份为 %s" % (ex, bad.name), file=sys.stderr)
             except OSError:
                 print("索引无法解析且备份失败: %s" % ex, file=sys.stderr)
+            self._rebuild_from_items()
             return
         if isinstance(raw, list):          # v1: 只有条目列表，无分类
             self.entries = raw
@@ -67,10 +71,48 @@ class KnowledgeIndex:
         for e in self.entries:
             if e.get("origin_dir"):
                 e["origin_dir"] = str(Path(e["origin_dir"]).resolve())
+        # 老库没有 version 字段，启动时顺手升级到当前 schema（只读库忽略失败）
+        if not isinstance(raw, dict) or raw.get("version") != SCHEMA_VERSION:
+            try:
+                self._save()
+            except OSError:
+                pass
+
+    def _rebuild_from_items(self):
+        """按 items/ 里的正文重建条目：标题与标签重新解析，原件位置已无从得知"""
+        rebuilt = []
+        for f in sorted(self.items_dir.glob("*.md")):
+            eid = f.stem
+            if not ID_RE.match(eid):
+                continue
+            try:
+                title, tags, _ = MdRenderer.parse_file(f)
+            except Exception:
+                title, tags = None, []
+            try:
+                stamp = datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec="seconds")
+            except OSError:
+                stamp = datetime.now().isoformat(timespec="seconds")
+            rebuilt.append({
+                "id": eid,
+                "title": title or eid,
+                "alias": None,
+                "tags": [str(t) for t in tags] if isinstance(tags, list) else [],
+                "source_name": (title or eid) + ".md",
+                "origin_dir": None,
+                "category": UNTAGGED,
+                "added_at": stamp,
+                "updated_at": stamp,
+            })
+        self.entries = rebuilt
+        self.categories = []
+        self._save()
+        print("索引已从 items/ 重建：%d 条" % len(rebuilt), file=sys.stderr)
 
     def _save(self):
-        payload = json.dumps({"categories": self.categories, "entries": self.entries},
-                             ensure_ascii=False, indent=2)
+        payload = json.dumps(
+            {"version": SCHEMA_VERSION, "categories": self.categories, "entries": self.entries},
+            ensure_ascii=False, indent=2)
         with self._lock:
             atomic_write(self.index_file, payload)
 
@@ -333,6 +375,42 @@ class KnowledgeIndex:
         out = [{"id": c["id"], "name": c["name"], "count": counts.get(c["id"], 0)}
                for c in self.categories]
         return out, counts.get(UNTAGGED, 0)
+
+    # ---------- 导出 ----------
+    def export_entry(self, eid: str, dest_dir) -> dict:
+        """把一条知识点连同图片按原相对路径导出成一个独立文件夹，正文用相对路径引用仍然有效"""
+        entry = self.find(eid)
+        name = ILLEGAL_FN.sub("_", KnowledgeIndex.display(entry)).strip(" .") or eid
+        target = Path(dest_dir) / name
+        target.mkdir(parents=True, exist_ok=True)
+
+        body = read_text(self.path(eid))
+        atomic_write(target / ("%s.md" % name), body.encode("utf-8"))
+
+        images = 0
+        adir = self.assets_dir(eid)
+        if adir.is_dir():
+            for f in adir.rglob("*"):
+                if not f.is_file():
+                    continue
+                dst = target / f.relative_to(adir)
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(f, dst)
+                images += 1
+        return {"path": str(target), "images": images}
+
+    def export_library(self, dest_dir) -> dict:
+        """整个库打成一个 zip，含索引、正文、图片副本与设置，可直接搬迁恢复"""
+        dest = Path(dest_dir)
+        dest.mkdir(parents=True, exist_ok=True)
+        out = dest / ("知览备份-%s.zip" % datetime.now().strftime("%Y%m%d-%H%M%S"))
+        count = 0
+        with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in sorted(self.root.rglob("*")):
+                if f.is_file() and not f.name.endswith(".tmp"):
+                    z.write(f, f.relative_to(self.root))
+                    count += 1
+        return {"path": str(out), "files": count, "bytes": out.stat().st_size}
 
     # ---------- 存储维护 ----------
     def _orphan_files(self):

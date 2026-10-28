@@ -9,9 +9,9 @@ from pathlib import Path
 
 import webview
 
-from app.paths import DATA_DIR
+from app.paths import DATA_DIR, LIB_DIR
 import app.server as app_server
-from app.server import INDEX, load_settings, serve, set_pending
+from app.server import INDEX, load_settings, notify_frontend, serve, set_pending
 
 BG_BY_MODE = {"dark": "#1b1e23", "light": "#f6f7f9", "sepia": "#f3ead9"}
 WINDOW_TITLE = "知览 · 本地知识库"
@@ -89,6 +89,26 @@ def activate_existing():
     return False
 
 
+def library_problem():
+    """库目录不可写时，后续所有保存都会失败，不如在启动阶段就说清楚"""
+    try:
+        probe = LIB_DIR / ".write-probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+        return None
+    except Exception as ex:
+        return str(ex)
+
+
+def fatal(msg):
+    """没有窗口可用时的最后提示：原生消息框，不依赖前端"""
+    try:
+        from ctypes import windll
+        windll.user32.MessageBoxW(None, msg, "知览 · 启动失败", 0x10)
+    except Exception:
+        print(msg, file=sys.stderr)
+
+
 class Api:
     """暴露给前端 JS 的原生能力"""
 
@@ -121,18 +141,15 @@ class Api:
             if f.suffix.lower() != ".md" or not f.is_file():
                 continue
             try:
-                INDEX.add(f, target)
-                added.append(f.name)
+                entry = INDEX.add(f, target)
+                added.append(entry)
             except Exception as ex:
                 errors.append("%s: %s" % (f.name, ex))
-        if self._window:
-            msg = ("已收录 %d 个知识点" % len(added)) if added else "没有可导入的 .md 文件"
-            if errors:
-                msg += "；%d 个失败：%s" % (len(errors), "；".join(errors[:2]))
-            self._window.evaluate_js(
-                "window.refreshLibrary && window.refreshLibrary();"
-                "window.toast && toast(%s)" % json.dumps(msg, ensure_ascii=False))
-        return {"added": added, "errors": errors}
+        # 不依赖 evaluate_js（部分环境上会挂住）：置为待打开，页面通过长轮询取走后自行刷新
+        if added:
+            set_pending(added[-1]["id"])
+            notify_frontend()
+        return {"added": [e["title"] for e in added], "errors": errors}
 
     def reveal_in_folder(self, eid):
         """在资源管理器中定位原始 .md 文件"""
@@ -155,6 +172,46 @@ class Api:
             os.startfile(str(origin))
             return True
         return False
+
+    def _pick_folder(self):
+        """弹出文件夹选择框，取消时返回 None"""
+        if not self._window:
+            return None
+        try:
+            flag = webview.FOLDER_DIALOG
+        except AttributeError:
+            flag = getattr(webview, "FOLDER_DIALOG", None)
+        if flag is None:
+            return None
+        try:
+            picked = self._window.create_file_dialog(flag, allow_multiple=False)
+        except Exception:
+            return None
+        if not picked:
+            return None
+        return picked[0] if isinstance(picked, (list, tuple)) else picked
+
+    def export_entry(self, eid):
+        """导出单条知识点（正文 + 图片）到用户选择的文件夹"""
+        dest = self._pick_folder()
+        if not dest:
+            return {"ok": False, "error": "已取消"}
+        try:
+            info = INDEX.export_entry(eid, dest)
+        except Exception as ex:
+            return {"ok": False, "error": str(ex)}
+        return {"ok": True, **info}
+
+    def export_library(self):
+        """把整个知识库打包成 zip 备份"""
+        dest = self._pick_folder()
+        if not dest:
+            return {"ok": False, "error": "已取消"}
+        try:
+            info = INDEX.export_library(dest)
+        except Exception as ex:
+            return {"ok": False, "error": str(ex)}
+        return {"ok": True, **info}
 
 
 API = None
@@ -216,6 +273,11 @@ def on_started():
 
 def main():
     global API
+    problem = library_problem()
+    if problem:
+        fatal("知识库目录无法写入：\n%s\n\n%s\n\n请检查文件夹权限、只读属性或磁盘空间后重试。"
+              % (LIB_DIR, problem))
+        return
     files = collect_md_args(sys.argv)
 
     # 已经有窗口在跑：文件转交过去，别开第二个进程抢着写同一个库

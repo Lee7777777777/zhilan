@@ -293,6 +293,22 @@ function wireMaintenance() {
     }
     refreshMaintenance();
   };
+
+  const exportAll = $("#export-all");
+  if (exportAll) exportAll.onclick = async () => {
+    if (!(window.pywebview && window.pywebview.api)) return toast("仅桌面版支持导出备份");
+    exportAll.disabled = true;
+    try {
+      const r = await window.pywebview.api.export_library();
+      if (!r || !r.ok) {
+        if (r && r.error === "已取消") return;
+        return toast("备份失败：" + ((r && r.error) || "未知错误"));
+      }
+      toast("已备份 " + r.files + " 个文件（" + fmtSize(r.bytes) + "）到 " + r.path);
+    } finally {
+      exportAll.disabled = false;
+    }
+  };
 }
 
 /* ---------- 自定义显示名 ---------- */
@@ -372,6 +388,7 @@ function wireMenu() {
     if (act === "open") return openEntry(id);
     if (act === "source") return openSource(id);
     if (act === "reveal") return reveal(id);
+    if (act === "export") return exportEntry(id);
     if (act === "rename") { await openEntry(id); return openRenameBar(); }
     if (act === "delete") return removeEntry(id);
   });
@@ -380,6 +397,16 @@ function wireMenu() {
 async function reveal(id) {
   if (!(window.pywebview && window.pywebview.api)) return toast("仅桌面版支持定位文件");
   if (!(await window.pywebview.api.reveal_in_folder(id))) toast("原始文件已移动或删除");
+}
+
+async function exportEntry(id) {
+  if (!(window.pywebview && window.pywebview.api)) return toast("仅桌面版支持导出");
+  const r = await window.pywebview.api.export_entry(id);
+  if (!r || !r.ok) {
+    if (r && r.error === "已取消") return;
+    return toast("导出失败：" + ((r && r.error) || "未知错误"));
+  }
+  toast("已导出到 " + r.path + (r.images ? "（含 " + r.images + " 张图片）" : ""));
 }
 
 async function removeEntry(id) {
@@ -762,6 +789,11 @@ async function boot() {
   wireMenu();
   wireEditor();
   wireRename();
+  // 版本信息不参与首屏，拿到后再填
+  api("/api/meta").then((m) => {
+    const el = $("#about-line");
+    if (el) el.textContent = "知览 v" + m.version + " · 设置自动保存到 library/settings.json";
+  }).catch(() => {});
   const first = await takePending();
   if (first) current = first;           // 先占位，避免 loadList 自动打开第一条
   await loadGroups();

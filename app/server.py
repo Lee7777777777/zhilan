@@ -239,6 +239,14 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ping":
             return self._json({"ok": True, "pid": os.getpid(), "hits": note_ping(),
                                "pending": bool(_PENDING["id"])})
+        if path == "/api/meta":
+            from app import __version__
+            return self._json({
+                "version": __version__,
+                "entries": len(INDEX.entries),
+                "categories": len(INDEX.categories),
+                "library": str(INDEX.root),
+            })
         if path == "/api/pending":
             return self._json({"id": take_pending()})
         if path == "/api/wait":

@@ -199,13 +199,14 @@ window.addEventListener("load", function () {
       <label>存储清理</label>
       <div class="row">
         <button id="cleanup" class="mini">清理孤儿备份与图片</button>
+        <button id="export-all" class="mini" title="把整个知识库打包成 zip 备份">导出整个知识库</button>
       </div>
       <p id="cleanup-info" class="hint field-note">只清理已移除知识点留下的文件，现存知识点的历史备份会保留。</p>
     </div>
 
     <div class="sheet-foot">
       <button id="reset-settings" class="mini">恢复默认</button>
-      <span class="hint">设置自动保存到 library/settings.json</span>
+      <span class="hint" id="about-line">设置自动保存到 library/settings.json</span>
     </div>
   </div>
 </div>
@@ -215,6 +216,7 @@ window.addEventListener("load", function () {
   <li data-act="source">查看 / 编辑原文</li>
   <li data-act="rename">重命名显示名</li>
   <li data-act="reveal">在文件夹中定位</li>
+  <li data-act="export">导出到文件夹…</li>
   <li class="sep"></li>
   <li data-act="delete" class="danger">从知识库移除</li>
 </ul>
