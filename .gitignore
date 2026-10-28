@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# 打包产物
+build/
+dist/
+*.exe
+
+# 运行时产生的文件
+.instance.json
+知览-崩溃日志.txt
+
+# 个人知识库数据：含自己的笔记与图片，不随代码同步
+library/
+
+# 工作区记忆（调试记录、本地路径等），不对外
+.workbuddy/

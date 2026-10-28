@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>知览 · 本地知识库</title>
+<link rel="stylesheet" href="/static/page.css">
+<link rel="stylesheet" href="/static/app.css">
+<link id="hljs-theme" rel="stylesheet" href="/static/atom-one-dark.css">
+<link rel="stylesheet" href="/static/katex/katex.min.css">
+<script defer src="/static/highlight.min.js"></script>
+<script defer src="/static/katex/katex.min.js"></script>
+<script defer src="/static/katex/auto-render.min.js"></script>
+<script>
+/* 兜底：脚本出错时把原因显示出来，别留一个白屏 */
+window.__errs = [];
+window.addEventListener("error", function (e) { window.__errs.push(e.message || String(e)); });
+window.addEventListener("unhandledrejection", function (e) { window.__errs.push(String(e.reason)); });
+window.addEventListener("load", function () {
+  if (!window.__errs.length) return;
+  var t = document.getElementById("toast");
+  if (t) { t.textContent = "脚本错误：" + window.__errs[0]; t.hidden = false; }
+});
+</script>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <div class="side-head">
+      <div>
+        <div class="brand">知览</div>
+        <div class="sub">本地 Markdown 知识库</div>
+      </div>
+      <button id="open-settings" class="icon-btn" title="外观设置 (Ctrl+,)">
+        <svg viewBox="0 0 24 24" width="18" height="18"><path fill="currentColor" d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.48.48 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58ZM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2Z"/></svg>
+      </button>
+    </div>
+
+    <div class="side-tools">
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" width="14" height="14"><path fill="currentColor" d="M15.5 14h-.8l-.3-.3a6.5 6.5 0 1 0-.7.7l.3.3v.8l5 5 1.5-1.5-5-5Zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14Z"/></svg>
+        <input id="search" type="search" placeholder="搜索标题或 #标签">
+      </div>
+      <div class="tool-row">
+        <button id="import" class="primary">＋ 导入知识点</button>
+        <button id="new-entry" title="直接新建一篇空白知识点，存入库内">新建</button>
+      </div>
+    </div>
+
+    <div class="groups">
+      <div id="groupbar" class="groupbar"></div>
+      <button id="add-group" class="grp add" title="新建分类">＋ 分类</button>
+    </div>
+    <form id="groupform" class="groupform" hidden>
+      <input id="groupname" maxlength="20" placeholder="分类名称" autocomplete="off">
+      <button type="submit" class="mini ok">确定</button>
+      <button type="button" id="group-cancel" class="mini">取消</button>
+    </form>
+
+    <div id="dropzone" class="drop">把 .md 文件拖到窗口任意位置即可收录</div>
+    <nav id="list"></nav>
+    <div class="side-foot">
+      <span><b id="count">0</b> 条知识点</span>
+      <button id="mode-cycle" class="mini" title="切换深/浅色">深色</button>
+    </div>
+  </aside>
+
+  <main id="stage">
+    <div id="empty">
+      <div class="empty-icon">
+        <svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm8 1.5V8h4.5L14 3.5ZM7.5 12h9v1.6h-9V12Zm0 3.5h6v1.6h-6v-1.6Z"/></svg>
+      </div>
+      <div class="empty-title">知识库还是空的</div>
+      <div class="empty-text">点击「导入知识点」，或把 .md 文件直接拖进窗口。<br>
+        表格、代码高亮、$LaTeX$ 公式与 Mermaid 图表都会被完整渲染。</div>
+    </div>
+    <article id="doc" hidden>
+      <header class="doc-head">
+        <div class="doc-meta">
+          <b id="doc-name" class="alias-name" hidden></b>
+          <span id="doc-tags"></span>
+          <span id="doc-src"></span>
+          <span class="spacer"></span>
+          <select id="cat-select" title="把该知识点移动到其他分类"></select>
+          <button id="rename" class="mini" title="给这个知识点起一个自定义显示名">重命名</button>
+          <button id="reveal" class="mini" title="在资源管理器中打开原始文件位置">定位文件</button>
+          <button id="del" class="mini danger" title="从知识库移除（不删除原始文件）">移除</button>
+        </div>
+        <form id="renamebar" class="renamebar" hidden>
+          <input id="rename-input" maxlength="60" placeholder="自定义显示名，留空则用文件里的标题" autocomplete="off">
+          <button type="submit" class="mini ok">保存</button>
+          <button type="button" id="rename-clear" class="mini" title="清除自定义名，恢复文件里的标题">用回原标题</button>
+          <button type="button" id="rename-cancel" class="mini">取消</button>
+          <label class="ck"><input type="checkbox" id="rename-file"> 同时重命名磁盘上的 .md 文件</label>
+          <span id="rename-hint" class="hint"></span>
+        </form>
+      </header>
+      <div id="body"></div>
+    </article>
+
+    <section id="editor" hidden>
+      <div class="ed-head">
+        <div class="ed-id">
+          <b id="ed-name">原文</b>
+          <span id="ed-path" class="ed-path" title="正在编辑的文件"></span>
+        </div>
+        <div class="ed-actions">
+          <span id="ed-status" class="hint"></span>
+          <button id="ed-cancel" class="mini">关闭</button>
+          <button id="ed-save" class="mini ok">保存 <kbd>Ctrl+S</kbd></button>
+        </div>
+      </div>
+      <textarea id="ed-text" spellcheck="false" placeholder="# 在这里编辑 Markdown 原文"></textarea>
+    </section>
+  </main>
+
+  <aside id="tocpane">
+    <div class="toc-title">目录</div>
+    <ul id="toc"></ul>
+  </aside>
+</div>
+
+<div id="settings" class="sheet" hidden>
+  <div class="sheet-card">
+    <div class="sheet-head">
+      <h2>外观设置</h2>
+      <button id="close-settings" class="icon-btn" title="关闭 (Esc)">✕</button>
+    </div>
+
+    <div class="field">
+      <label>配色模式</label>
+      <div class="seg" data-key="mode">
+        <button data-val="dark">深色</button>
+        <button data-val="light">浅色</button>
+        <button data-val="sepia">护眼</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>强调色</label>
+      <div class="swatches" id="swatches"></div>
+      <div class="row">
+        <input id="accent" type="color">
+        <span class="hint">自定义颜色</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>阅读字体 <output id="fontFamilyVal"></output></label>
+      <div class="seg" data-key="fontFamily">
+        <button data-val="sans">无衬线</button>
+        <button data-val="serif">衬线</button>
+        <button data-val="mono">等宽</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>字号 <output id="fontScaleVal"></output></label>
+      <input id="fontScale" type="range" min="13" max="22" step="1">
+    </div>
+
+    <div class="field">
+      <label>行高 <output id="lineHeightVal"></output></label>
+      <input id="lineHeight" type="range" min="1.4" max="2.2" step="0.05">
+    </div>
+
+    <div class="field">
+      <label>正文宽度 <output id="contentWidthVal"></output></label>
+      <input id="contentWidth" type="range" min="620" max="1200" step="20">
+    </div>
+
+    <div class="field">
+      <label>侧栏宽度 <output id="sideWidthVal"></output></label>
+      <input id="sideWidth" type="range" min="220" max="400" step="8">
+    </div>
+
+    <div class="field">
+      <label>间距 <output id="densityVal"></output></label>
+      <div class="seg" data-key="density">
+        <button data-val="comfortable">宽松</button>
+        <button data-val="compact">紧凑</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>代码配色</label>
+      <div class="seg" data-key="codeTheme">
+        <button data-val="dark">深色块</button>
+        <button data-val="light">浅色块</button>
+      </div>
+    </div>
+
+    <div class="field inline">
+      <label for="showToc">显示右侧目录</label>
+      <input id="showToc" type="checkbox">
+    </div>
+    <p class="hint field-note">窗口较窄时目录会自动隐藏，与这里的开关无关。</p>
+
+    <div class="field">
+      <label>存储清理</label>
+      <div class="row">
+        <button id="cleanup" class="mini">清理孤儿备份与图片</button>
+      </div>
+      <p id="cleanup-info" class="hint field-note">只清理已移除知识点留下的文件，现存知识点的历史备份会保留。</p>
+    </div>
+
+    <div class="sheet-foot">
+      <button id="reset-settings" class="mini">恢复默认</button>
+      <span class="hint">设置自动保存到 library/settings.json</span>
+    </div>
+  </div>
+</div>
+
+<ul id="menu" class="menu" hidden>
+  <li data-act="open">打开阅读</li>
+  <li data-act="source">查看 / 编辑原文</li>
+  <li data-act="rename">重命名显示名</li>
+  <li data-act="reveal">在文件夹中定位</li>
+  <li class="sep"></li>
+  <li data-act="delete" class="danger">从知识库移除</li>
+</ul>
+<div id="toast" class="toast" hidden></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

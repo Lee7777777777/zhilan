@@ -1,0 +1,4 @@
+pywebview>=6.0
+markdown-it-py>=3.0
+mdit-py-plugins>=0.4
+python-frontmatter>=1.0
