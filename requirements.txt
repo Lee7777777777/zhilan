@@ -1,4 +1,11 @@
+# 运行必需（启动知览.bat 会自动安装这些）
 pywebview>=6.0
 markdown-it-py>=3.0
 mdit-py-plugins>=0.4
 python-frontmatter>=1.0
+
+# 仅 tools/ 下的图标脚本（draw_icon.py / make_icon.py）需要，应用本身用不到
+Pillow>=10.0
+
+# 仅打包 exe 时需要（build_exe.bat 会自动安装，不必提前装）
+# pyinstaller>=6.0

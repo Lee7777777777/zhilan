@@ -6,7 +6,7 @@
 
 ## 运行
 
-双击 `启动知览.bat`（推荐）：会自动检测 Python、缺依赖时自动 `pip install -r requirements.txt`，然后以无控制台窗口方式启动。
+解压后不需要额外安装步骤，依赖会自动装好：双击 `启动知览.bat`（推荐），脚本会自动检测 Python、缺依赖时自动 `pip install -r requirements.txt`，然后以无控制台窗口方式启动。
 
 调试模式（带 DevTools 与控制台输出）：
 
@@ -136,7 +136,7 @@ build_exe.bat            # 或 python -m PyInstaller --noconfirm --clean zhilan.
 
 运行时会解压到临时目录，因此**用户数据固定放在 exe 同级的 `library\` 文件夹**：
 
-- exe 在项目根目录 → 直接使用现有知识库（当前就是这种状态）。
+- exe 和 `library\` 在同一目录 → 直接使用那份知识库。
 - 拷到桌面或其他目录 → exe 旁边会自动新建空的 `library\`；想带走数据，把整个 `library` 文件夹一起复制过去即可（图片已随库保存，不会丢）。
 - 换了位置之后，右键菜单里写死的还是旧路径，需要用 `python tools/shell_menu.py register --exe "新路径\知览.exe"` 重新注册。
 
