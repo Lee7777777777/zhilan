@@ -19,7 +19,7 @@ if not defined PY where py >nul 2>nul && set "PY=py -3"
 if not defined PYW where py >nul 2>nul && set "PYW=py -3w"
 if not defined PY (
     echo [ERROR] Python not found in PATH.
-    echo         Install Python 3.10+ and tick "Add python.exe to PATH", then retry.
+    echo         Install Python 3.9+ and tick "Add python.exe to PATH", then retry.
     pause
     exit /b 1
 )

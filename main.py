@@ -100,6 +100,35 @@ def library_problem():
         return str(ex)
 
 
+# WebView2 Evergreen Runtime 的更新通道 GUID，用来判断有没有装运行时
+WEBVIEW2_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+WEBVIEW2_URL = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+
+
+def webview2_version():
+    """返回 WebView2 运行时版本号，本机没装则返回 None。
+
+    Windows 11 出厂自带；Windows 10 有一部分机器（尤其是长期未更新的 LTSC
+    或精简版）没有，界面会直接起不来，所以启动前先探一次。
+    """
+    try:
+        import winreg
+    except ImportError:
+        return "unknown"          # 非 Windows 平台，交给 pywebview 自己处理
+    base = r"SOFTWARE\Microsoft\EdgeUpdate\Clients\%s" % WEBVIEW2_GUID
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        for flags in (0, winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY):
+            try:
+                with winreg.OpenKey(root, base, 0, winreg.KEY_READ | flags) as k:
+                    try:
+                        return winreg.QueryValueEx(k, "pv")[0]
+                    except OSError:
+                        return "已安装"      # 键在但没有版本号，也算装了
+            except OSError:
+                continue
+    return None
+
+
 def fatal(msg):
     """没有窗口可用时的最后提示：原生消息框，不依赖前端"""
     try:
@@ -316,6 +345,14 @@ def main():
     app_server.NOTIFY = lambda js: window.evaluate_js(js)
     try:
         webview.start(on_started, debug="--debug" in sys.argv)
+    except Exception as ex:
+        # 最常见的失败原因就是 Windows 10 上缺 WebView2 运行时，给可执行的指引而不是堆栈
+        if webview2_version() is None:
+            fatal("本机没有检测到 Microsoft Edge WebView2 运行时，界面无法渲染。\n\n"
+                  "Windows 10 的部分版本不会预装它。请下载安装（约 1 MB 引导器，需联网）：\n%s\n\n"
+                  "装好后重新双击启动知览即可。" % WEBVIEW2_URL)
+            return
+        raise
     finally:
         httpd.shutdown()
         try:
@@ -325,15 +362,57 @@ def main():
             pass
 
 
-if __name__ == "__main__":
+def env_check():
+    """python main.py --check：不启动窗口，只报告启动条件是否满足"""
+    import platform
+
+    print("知览 环境自检")
+    print("-" * 46)
+    print("系统        : %s %s (%s)" % (platform.system(), platform.release(), platform.version()))
+    print("架构        : %s" % (platform.machine(),))
+    print("Python      : %s" % sys.version.split()[0])
+    if sys.version_info < (3, 9):
+        print("             !! 需要 Python 3.9 及以上")
+    else:
+        print("             OK")
     try:
-        main()
-    except Exception:
-        # 打包成无控制台的 exe 后异常无处可看，落盘便于排查
-        import traceback
+        import webview as _wv
+        print("pywebview   : %s" % getattr(_wv, "__version__", "已安装"))
+    except Exception as ex:
+        print("pywebview   : 缺失 (%s)" % ex)
+    ver = webview2_version()
+    if ver:
+        print("WebView2    : %s" % ver)
+    else:
+        print("WebView2    : 未安装 -> %s" % WEBVIEW2_URL)
+    problem = library_problem()
+    print("知识库目录  : %s" % LIB_DIR)
+    print("             %s" % ("OK" if not problem else "不可写：%s" % problem))
+    for mod, name in (("markdown_it", "markdown-it-py"),
+                      ("mdit_py_plugins", "mdit-py-plugins"),
+                      ("frontmatter", "python-frontmatter")):
+        try:
+            __import__(mod)
+            print("%-12s: OK" % name)
+        except Exception:
+            print("%-12s: 缺失" % name)
+    print("-" * 46)
+    print("全部就绪" if ver and not problem else "请先按上面带 !! / 未安装 的项目处理")
 
-        from app.paths import DATA_DIR, FROZEN
 
-        if FROZEN:
-            (DATA_DIR / "知览-崩溃日志.txt").write_text(traceback.format_exc(), encoding="utf-8")
-        raise
+if __name__ == "__main__":
+    if "--check" in sys.argv:
+        env_check()
+    else:
+        try:
+            main()
+        except Exception:
+            # 打包成无控制台的 exe 后异常无处可看，落盘便于排查
+            import traceback
+
+            from app.paths import DATA_DIR, FROZEN
+
+            if FROZEN:
+                (DATA_DIR / "知览-崩溃日志.txt").write_text(
+                    traceback.format_exc(), encoding="utf-8")
+            raise

@@ -4,9 +4,42 @@
 
 版本 1.0.0 · MIT License
 
+## 系统要求
+
+- **Windows 10 / Windows 11 均可**，64 位。WebView2 官方支持 Windows 10 SAC 1709 及以上与各 LTSC 版本（含 2015/2016/2019/2021 LTSC），Windows 11 全系支持。
+- **Python 3.9 及以上**（Python 3.14 官方支持 Windows 10 及更高版本）。没有 Python 也能用——见下面「免 Python 的 exe」。
+- **Microsoft Edge WebView2 运行时**：界面靠它渲染。Windows 11 出厂自带；Windows 10 多数机器已通过系统更新装上，但**精简版 / 长期离线未更新的机器可能没有**。
+- **.NET Framework 4.6.2 及以上**：pywebview 在 Windows 上走 WinForms 宿主。Windows 10 / 11 系统自带（Win10 默认 4.8），正常不用管。
+
+不确定自己机器上有没有？跑一次自检，它会列出系统版本、Python、WebView2、依赖和知识库目录的可写性：
+
+```bash
+python main.py --check
+```
+
+如果 `WebView2` 那行显示「未安装」，下载安装引导器（约 1 MB，装的时候需要联网）：<https://go.microsoft.com/fwlink/p/?LinkId=2124703>
+
+万一启动时才发现缺运行时，程序会直接弹原生提示框告诉你去哪里装，不会白屏或静默退出。
+
+### Windows 10 与 Windows 11 的差别
+
+| | Windows 10 | Windows 11 |
+|---|---|---|
+| 界面渲染 | 需 WebView2 运行时（见上） | 系统自带，开箱即用 |
+| 右键菜单 | 一级菜单直接显示「用知览打开」 | 需点「显示更多选项」或按 `Shift+F10` |
+| 其余功能 | 完全一致（单实例转发、拖放导入、导出备份等） | 同 |
+
 ## 运行
 
-解压后不需要额外安装步骤，依赖会自动装好：双击 `启动知览.bat`（推荐），脚本会自动检测 Python、缺依赖时自动 `pip install -r requirements.txt`，然后以无控制台窗口方式启动。
+源码运行：解压后不需要额外安装步骤，依赖会自动装好：双击 `启动知览.bat`（推荐），脚本会自动检测 Python、缺依赖时自动 `pip install -r requirements.txt`，然后以无控制台窗口方式启动。
+
+打包 exe（可选，产出约 16 MB 的单文件，双击即可运行、数据存在 exe 同级的 `library/`）：
+
+```bash
+build_exe.bat          # 自动装 PyInstaller 并按 zhilan.spec 打包，产出 dist/知览.exe
+```
+
+源码包里不含 exe，需要就自己执行上面这条；打包出来的 exe 换到任何 Windows 10/11 机器上双击都能跑（目标机器仍需 WebView2 运行时）。
 
 调试模式（带 DevTools 与控制台输出）：
 

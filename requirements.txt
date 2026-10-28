@@ -1,5 +1,8 @@
 # 运行必需（启动知览.bat 会自动安装这些）
+# Windows 10 / 11 均适用；pywebview 在 Windows 上走 WinForms + WebView2，
+# 会由 pip 自动带上 pythonnet，这里显式列出只为装的时候心里有数
 pywebview>=6.0
+pythonnet>=3.0; sys_platform == "win32"
 markdown-it-py>=3.0
 mdit-py-plugins>=0.4
 python-frontmatter>=1.0
