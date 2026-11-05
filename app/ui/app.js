@@ -569,6 +569,24 @@ async function loadList(q = "") {
   }
 }
 
+/* ---------- 大文档 ---------- */
+const BIG_HTML = 400 * 1024;      // 超过这个体量启用屏幕外懒布局
+const TOC_MAX = 3000;             // 目录渲染上限（1600 条约 4 ms，留足余量即可）
+
+const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
+
+/* 注意：不要试图把 innerHTML 拆成多帧插入。
+   实测 1 MB 文档一次性挂载 482 ms，按帧拆反而 18.5 秒——
+   每帧插入都会重排一次已挂入的内容，整体退化成 O(n²)。
+   屏幕外的布局开销交给 CSS 的 content-visibility 处理。 */
+function mountHtml(html, token) {
+  const box = $("#body");
+  box.innerHTML = html;
+  // 文档大时打开屏幕外懒布局：Chromium 会跳过视口外元素的 layout/paint
+  document.body.dataset.big = html.length > BIG_HTML ? "1" : "";
+  return Promise.resolve();
+}
+
 async function openEntry(id, keepScroll) {
   if (editingId) { $("#editor").hidden = true; editingId = null; setDirty(false); }
   staleDoc = false;
@@ -588,7 +606,8 @@ async function openEntry(id, keepScroll) {
   $("#doc-tags").innerHTML = (d.tags || []).map((t) => '<span class="chip">#' + esc(t) + "</span>").join("");
   $("#doc-src").textContent = d.source_name || "";
   $("#doc-src").title = "点击查看 / 编辑 Markdown 原文";
-  $("#body").innerHTML = d.html;
+  await mountHtml(d.html, id);
+  if (id !== current) return;
 
   const sel = $("#cat-select");
   sel.innerHTML = '<option value="">未分类</option>' +
@@ -603,9 +622,13 @@ async function openEntry(id, keepScroll) {
     loadList($("#search").value);
   };
 
-  tocEl.innerHTML = d.toc
+  const tocItems = d.toc.length > TOC_MAX ? d.toc.slice(0, TOC_MAX) : d.toc;
+  tocEl.innerHTML = tocItems
     .map((t) => '<li><a class="l' + t.level + '" href="#' + t.id + '" data-id="' + t.id + '">' + esc(t.text) + "</a></li>")
-    .join("");
+    .join("") +
+    (d.toc.length > TOC_MAX
+      ? '<li class="toc-more">还有 ' + (d.toc.length - TOC_MAX) + " 个标题未列出</li>"
+      : "");
   tocEl.querySelectorAll("a").forEach((a) => {
     a.onclick = (e) => {
       e.preventDefault();
@@ -615,6 +638,7 @@ async function openEntry(id, keepScroll) {
   });
 
   await enrich();
+  if (id !== current) return;
   stageEl.scrollTop = restore;
   markToc();
 }
@@ -641,6 +665,15 @@ function ensureMermaid(w) {
   return w.__mermaidLoading;
 }
 
+/* 按帧切片执行：大文档里有上千个代码块，一次性高亮/排版会长时间锁住主线程 */
+async function eachFrame(list, fn, perFrame) {
+  const step = perFrame || 40;
+  for (let i = 0; i < list.length; i += step) {
+    for (let j = i; j < Math.min(i + step, list.length); j++) fn(list[j]);
+    if (i + step < list.length) await nextFrame();
+  }
+}
+
 async function enrich() {
   await scriptsReady;
   const w = window;
@@ -656,24 +689,38 @@ async function enrich() {
       try { await mermaid.run({ nodes: Array.from(graphs) }); } catch (e) { console.error(e); }
     }
   }
-  w.hljs && document.querySelectorAll("#body pre code").forEach((el) => w.hljs.highlightElement(el));
+  if (w.hljs) {
+    await eachFrame(document.querySelectorAll("#body pre code"),
+      (el) => { try { w.hljs.highlightElement(el); } catch (e) { /* 单个块失败不影响其他 */ } }, 120);
+  }
   if (w.renderMathInElement) {
-    w.renderMathInElement($("#body"), {
-      delimiters: [
-        { left: "$$", right: "$$", display: true },
-        { left: "$", right: "$", display: false },
-      ],
-      ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"],
-      throwOnError: false,
-    });
+    // 整棵树一次遍历：拆成逐个子元素调用会反复重建 walker，
+    // 实测 512 KB 文档从 0.3 秒劣化到 40 秒以上，不能拆。
+    try {
+      w.renderMathInElement($("#body"), {
+        delimiters: [
+          { left: "$$", right: "$$", display: true },
+          { left: "$", right: "$", display: false },
+        ],
+        ignoredTags: ["script", "noscript", "style", "textarea", "pre", "code"],
+        throwOnError: false,
+      });
+    } catch (e) { /* 公式出错就别渲染 */ }
   }
 }
 
 function markToc() {
   const heads = Array.from(document.querySelectorAll("#body h1,#body h2,#body h3,#body h4"));
-  const top = stageEl.scrollTop;
-  let active = heads[0];
-  for (const h of heads) if (h.offsetTop - 40 <= top) active = h;
+  if (!heads.length) return;
+  const top = stageEl.scrollTop + 40;
+  // 标题在文档里天然递增，用二分而不是逐个比：大文档有上万个标题，
+  // 每次滚动都全遍历会明显拖慢滚动。
+  let lo = 0, hi = heads.length - 1, active = heads[0];
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (heads[mid].offsetTop <= top) { active = heads[mid]; lo = mid + 1; }
+    else hi = mid - 1;
+  }
   tocEl.querySelectorAll("a").forEach((a) => a.classList.toggle("on", active && a.dataset.id === active.id));
 }
 
@@ -709,13 +756,45 @@ $("#search").addEventListener("input", (e) => {
 });
 stageEl.addEventListener("scroll", () => { clearTimeout(stageEl._t); stageEl._t = setTimeout(markToc, 60); });
 
-/* 拖放高亮（真实导入由外壳的原生事件完成） */
+/* 拖放高亮 */
 ["dragenter", "dragover"].forEach((t) =>
   document.addEventListener(t, (e) => { e.preventDefault(); document.body.classList.add("dropping"); })
 );
-["dragleave", "drop"].forEach((t) =>
+["dragleave"].forEach((t) =>
   document.addEventListener(t, (e) => { e.preventDefault(); document.body.classList.remove("dropping"); })
 );
+
+/* 拖放导入：必须抢在 pywebview 的 DOM 事件之前处理。
+   那条默认路径会在 JS 侧把整个 drop 事件对象序列化成 JSON，而
+   event.target / currentTarget 就是 body —— 等于把整篇正在阅读的文档
+   DOM 全量导出一次（实测 500 KB 笔记 → 18 秒、300 MB 字符串，3 MB 笔记
+   直接卡死）。这里在捕获阶段接手，stopPropagation 掉，只把 File 列表交给
+   WebView2 换真实路径，再调一次参数极小的 import_dropped。 */
+function wireDrop() {
+  const post = window.chrome && window.chrome.webview &&
+    window.chrome.webview.postMessageWithAdditionalObjects;
+  document.addEventListener("drop", (e) => {
+    e.preventDefault();
+    document.body.classList.remove("dropping");
+    if (!post) return;                     // 非 WebView2：留给外壳的降级通道
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return;
+    e.stopPropagation();                   // 关键：不让 pywebview 去序列化 DOM
+    if (!(window.pywebview && window.pywebview.api && window.pywebview.api.import_dropped)) return;
+    const names = Array.prototype.map.call(files, (f) => f.name);
+    try {
+      post.call(window.chrome.webview, "FilesDropped", files);
+    } catch (err) {
+      toast("读取拖入文件的路径失败，请改用「导入知识点」按钮");
+      return;
+    }
+    window.pywebview.api.import_dropped(names).then((r) => {
+      if (!r) return;
+      if (r.errors && r.errors.length) toast("部分文件未能收录：" + r.errors[0]);
+      else if (r.added && r.added.length) toast("已收录 " + r.added.length + " 个文件");
+    }).catch(() => {});
+  }, true);                                // 捕获阶段
+}
 
 window.refreshLibrary = async () => {
   await loadGroups();
@@ -789,6 +868,7 @@ async function boot() {
   wireMenu();
   wireEditor();
   wireRename();
+  wireDrop();
   // 版本信息不参与首屏，拿到后再填
   api("/api/meta").then((m) => {
     const el = $("#about-line");

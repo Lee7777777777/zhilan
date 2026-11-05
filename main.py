@@ -4,6 +4,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
+import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -16,6 +19,41 @@ from app.server import INDEX, load_settings, notify_frontend, serve, set_pending
 BG_BY_MODE = {"dark": "#1b1e23", "light": "#f6f7f9", "sepia": "#f3ead9"}
 WINDOW_TITLE = "知览 · 本地知识库"
 INSTANCE_FILE = DATA_DIR / ".instance.json"
+
+# 前端 drop 走轻量通道时置位；原生 dom 事件在同一批文件上会迟到，据此跳过避免重复入库
+_DROP_GUARD = {"at": 0.0, "n": 0}
+_DROP_LOCK = threading.Lock()
+
+
+def _dnd_paths():
+    """pywebview 把真实文件路径暂存在 webview.dom._dnd_state['paths']（私有，取不到就返回空）"""
+    try:
+        from webview.dom import _dnd_state
+    except Exception:
+        return []
+    with _DROP_LOCK:
+        return list(_dnd_state.get("paths") or [])
+
+
+def _dnd_take(names):
+    """按文件名从暂存区取出真实路径并移除，避免下次拖放重复命中"""
+    try:
+        from webview.dom import _dnd_state
+    except Exception:
+        return []
+    want = {str(n) for n in (names or []) if n}
+    picked, rest = [], []
+    with _DROP_LOCK:
+        pool = list(_dnd_state.get("paths") or [])
+        for base, path in pool:
+            real = urllib.parse.unquote(base or "")
+            if not want or real in want:
+                picked.append(urllib.parse.unquote(path or ""))
+            else:
+                rest.append((base, path))
+        _dnd_state["paths"] = rest
+    return [p for p in picked if p]
+
 
 
 def collect_md_args(argv):
@@ -180,6 +218,28 @@ class Api:
             notify_frontend()
         return {"added": [e["title"] for e in added], "errors": errors}
 
+    def import_dropped(self, names=None):
+        """拖放导入的轻量入口：前端只传文件名，真实路径从拖放暂存区取。
+
+        不走 pywebview 的 DOM 事件——那条路径会把 drop 事件的 target（即 body
+        整棵 DOM）递归序列化成 JSON，页面里打开的文档越大越慢：500 KB 的笔记就能
+        让一次拖放耗掉 18 秒、生成 300 MB 字符串。
+        """
+        try:
+            from webview.dom import _dnd_state
+        except Exception:
+            return {"added": [], "errors": ["当前环境不支持拖放，请用「导入知识点」按钮"]}
+        n_before = len(_dnd_state.get("paths") or [])
+        paths = _dnd_take(names)
+        if not paths and n_before:
+            paths = _dnd_take(None)          # 文件名对不上（编码差异）时兜底全取
+        if not paths:
+            return {"added": [], "errors": ["没有读取到文件路径，请改用「导入知识点」按钮"]}
+        with _DROP_LOCK:
+            _DROP_GUARD["at"] = time.time()
+            _DROP_GUARD["n"] = len(paths)
+        return self.import_paths(paths)
+
     def reveal_in_folder(self, eid):
         """在资源管理器中定位原始 .md 文件"""
         try:
@@ -280,15 +340,27 @@ def on_started():
     win = webview.windows[0]
 
     def handle_drop(event):
-        data = event if isinstance(event, dict) else getattr(event, "event", {}) or {}
-        files = (data.get("dataTransfer") or {}).get("files") or []
-        paths = [f.get("pywebviewFullPath") for f in files if f.get("pywebviewFullPath")]
+        """降级通道：前端没能拦截时才会走到这里。
+
+        注意这条路很贵——pywebview 在 JS 侧已经把整个 drop 事件序列化过了，
+        页面 DOM 越大越慢，所以正常情况应该由前端的轻量通道先处理掉。
+        """
+        with _DROP_LOCK:
+            recent = time.time() - _DROP_GUARD["at"] < 5.0 and _DROP_GUARD["n"] > 0
+            if recent:
+                _DROP_GUARD["n"] = 0        # 同一批文件已经导入过，别重复收
+                return
+        paths = _dnd_take(None) or [p for _, p in _dnd_paths()]
         if paths:
-            API.import_paths(paths)
+            API.import_paths([urllib.parse.unquote(p) for p in paths])
 
     def bind():
         apply_window_icon(win)
         try:
+            # 只注册 drop：pywebview 在没有任何 drop 监听器时会直接丢弃
+            # FilesDropped 消息，真实路径也就拿不到了。
+            # 千万别在这里再注册 dragover/dragenter——pywebview 的每个 DOM 监听器
+            # 都会在触发时把整个事件对象序列化一遍，dragover 每秒几十次，等于卡死。
             win.dom.body.on("drop", handle_drop)
         except Exception as ex:
             print("拖放未启用:", ex, file=sys.stderr)

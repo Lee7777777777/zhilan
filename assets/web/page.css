@@ -1,6 +1,15 @@
 /* ===== 知识点正文排版（颜色与尺寸全部取自 app.css 的设计令牌） ===== */
 #body { padding-top: calc(8px * var(--gap)); font-size: var(--fs); line-height: var(--lh); }
 
+/* 大文档：屏幕外的块不参与布局与绘制。
+   1 MB 的笔记有 34 万节点，全量布局要 1.2 秒以上且随篇幅增长；
+   交给 Chromium 的 content-visibility 按视口懒算，代价接近常数。
+   contain-intrinsic-size 给未渲染块一个高度估算，避免滚动条乱跳。 */
+body[data-big="1"] #body > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
+}
+
 #body h1, #body h2, #body h3, #body h4 {
   line-height: 1.35; font-weight: 650; color: var(--fg-strong);
   margin-top: calc(1.8em * var(--gap)); margin-bottom: calc(.7em * var(--gap));

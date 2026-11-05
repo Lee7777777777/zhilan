@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -149,6 +150,44 @@ def _safe_join(base: Path, rel: str) -> Path:
     except ValueError:
         raise ValueError("path escape") from None
     return target
+
+
+# 渲染结果缓存：纯 Python 的 markdown-it 约 1.5 MB/s，10 MB 的笔记要 14 秒，
+# 每次切换都重算完全没必要。用 (mtime, size) 做失效判断，最多留 6 篇。
+_RENDER_CACHE = OrderedDict()
+_RENDER_CACHE_MAX = 6
+_RENDER_LOCK = threading.Lock()
+
+
+def render_entry(eid: str, md_path: Path) -> dict:
+    """带缓存的解析 + 渲染；源文件改动（mtime/size 变化）后自动失效"""
+    try:
+        st = md_path.stat()
+        key = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None:
+        with _RENDER_LOCK:
+            hit = _RENDER_CACHE.get(eid)
+            if hit and hit[0] == key:
+                _RENDER_CACHE.move_to_end(eid)
+                return hit[1]
+    title, tags, body = MdRenderer.parse_file(md_path)
+    body = rewrite_local_images(body, eid)      # 本地图片改走 /media 通道
+    html, toc = MdRenderer().render(body)
+    data = {"title": title, "tags": tags, "html": html, "toc": toc}
+    if key is not None:
+        with _RENDER_LOCK:
+            _RENDER_CACHE[eid] = (key, data)
+            _RENDER_CACHE.move_to_end(eid)
+            while len(_RENDER_CACHE) > _RENDER_CACHE_MAX:
+                _RENDER_CACHE.popitem(last=False)
+    return data
+
+
+def drop_render_cache(eid: str) -> None:
+    with _RENDER_LOCK:
+        _RENDER_CACHE.pop(eid, None)
 
 
 class Server(ThreadingHTTPServer):
@@ -315,14 +354,11 @@ class Handler(BaseHTTPRequestHandler):
             entry = INDEX.find(eid)
         except StopIteration:
             return self._json({"error": "not found"}, 404)
-        md_path = INDEX.path(eid)
-        title, tags, body = MdRenderer.parse_file(md_path)
-        # 本地图片改走 /media 通道
-        body = rewrite_local_images(body, eid)
-        html, toc = MdRenderer().render(body)
+        data = render_entry(eid, INDEX.path(eid))
         self._json({
-            "id": eid, "title": title, "tags": tags,
-            "html": html, "toc": toc,
+            "id": eid, "title": data["title"], "tags": data["tags"],
+            "html": data["html"], "toc": data["toc"],
+            "bytes": len(data["html"]),
             "source_name": entry.get("source_name", ""),
             "category": entry.get("category") or None,
             "alias": entry.get("alias"),
